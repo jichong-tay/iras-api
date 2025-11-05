@@ -1,0 +1,9 @@
+# Sample UENs for testing
+# Note: These are example formats - replace with actual UENs for testing
+
+200312345A
+201234567B
+199876543C
+T08FC1234A
+T12AB5678Z
+S1234567890

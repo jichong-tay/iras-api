@@ -1,0 +1,13 @@
+[project]
+name = "iras-api"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "aiohttp>=3.13.2",
+    "dotenv>=0.9.9",
+    "httpx>=0.28.1",
+    "pandas>=2.3.3",
+    "streamlit==1.40.1",
+]

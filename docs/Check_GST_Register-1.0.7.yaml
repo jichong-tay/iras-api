@@ -1,0 +1,129 @@
+swagger: '2.0'
+info:
+  version: 1.0.7
+  title: Check GST Register
+  description: The Check GST Register API enables you to check whether businesses are GST-registered based on their GST registration number, UEN or NRIC.
+  x-ibm-name: check-gst-register-production-apigw
+basePath: /iras/prod/GSTListing
+paths:
+  /SearchGSTRegistered:
+    post:
+      tags: []
+      summary: ''
+      description: ''
+      parameters:
+        - schema:
+            $ref: '#/definitions/Request'
+          description: ''
+          name: body
+          in: body
+      responses:
+        '200':
+          schema:
+            $ref: '#/definitions/Response'
+          description: ''
+          examples:
+            application/json:
+              returnCode: 10
+              registrationId: ''
+              gstRegistrationNumber: 199202892R
+              name: ''
+              registeredFrom: 01/10/1994
+              registeredTo: ''
+              status: ''
+              Remarks: ''
+      deprecated: false
+definitions:
+  Request:
+    properties:
+      clientID:
+        type: string
+        description: Secret Client ID
+      regID:
+        type: string
+        description: Registration ID
+  Response:
+    properties:
+      returnCode:
+        type: integer
+        description: Return Code
+      data:
+        type: object
+        properties:
+          name:
+            type: string
+            description: Name of Organization
+          gstRegistrationNumber:
+            type: string
+            description: GST Registration Number
+          registrationId:
+            type: string
+            description: Registration ID
+          RegisteredFrom:
+            type: string
+            format: date
+            description: Registered From
+          RegisteredTo:
+            type: string
+            format: date
+            description: Registered To
+          Remarks:
+            type: string
+            description: Remarks
+          Status:
+            type: string
+            description: Status
+      info:
+        type: object
+        properties:
+          message:
+            type: string
+            description: Generic error message
+          messageCode:
+            type: integer
+            description: Generic error message code
+          fieldInfoList:
+            type: array
+            items:
+              type: object
+              properties:
+                field:
+                  type: string
+                  description: Field having the error
+                message:
+                  type: string
+                  description: Type of error faced
+schemes:
+  - https
+tags: []
+securityDefinitions:
+  Client ID:
+    description: ''
+    in: header
+    name: X-IBM-Client-Id
+    type: apiKey
+  Client Secret:
+    description: ''
+    in: header
+    name: X-IBM-Client-Secret
+    type: apiKey
+security:
+  - Client ID: []
+    Client Secret: []
+x-ibm-configuration:
+  enforced: true
+  phase: realized
+  testable: false
+  cors:
+    enabled: true
+  type: rest
+  servers:
+    - url: https://apiservices.iras.gov.sg/iras/prod/GSTListing
+      type:
+        - production
+        - development
+consumes:
+  - application/json
+produces:
+  - application/json
+host: apiservices.iras.gov.sg
