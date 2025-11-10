@@ -4,13 +4,29 @@
 
 A Streamlit web application that checks Singapore IRAS (Inland Revenue Authority) GST registration status via their official API. Supports both bulk Excel uploads and single UEN lookups with configurable concurrency and sliding-window rate limiting.
 
+**Three implementations available:**
+
+- `main.py`: Streamlit async version with aiohttp (fast, parallel requests, complex)
+- `main_requests.py`: Streamlit sync version with requests (simple, sequential, easier to debug)
+- `batch_script.py`: CLI script version with requests (no UI, scriptable, automation-friendly, simple)
+
 ## Architecture
+
+### main.py (Async Version)
 
 - **Single-file app**: All logic in `main.py` (Streamlit UI + async API client + rate limiter)
 - **Event loop pattern**: Dedicated asyncio loop running in a background daemon thread via `threading.Thread`
 - **Rate limiting**: Sliding-window tracker (100 calls/hour) stored in `st.session_state.rate_ts` deque
 - **Concurrency control**: User-configurable (1-20) via `asyncio.Semaphore` within background loop
 - **Environment switcher**: UI toggle between Production and Sandbox IRAS endpoints
+
+### main_requests.py (Sync Version)
+
+- **Single-file app**: All logic in `main_requests.py` (Streamlit UI + sync API client + rate limiter)
+- **Sequential processing**: One request at a time (no threading/async complexity)
+- **Rate limiting**: Same sliding-window tracker as async version
+- **Simpler code**: ~270 lines, no event loops, no async/await syntax
+- **Better progress**: Real-time accurate progress updates during batch processing
 
 ## Critical API Integration Details
 
@@ -51,7 +67,16 @@ A Streamlit web application that checks Singapore IRAS (Inland Revenue Authority
 ### Running the app
 
 ```bash
+# Streamlit async version (faster, parallel requests)
 streamlit run main.py
+
+# Streamlit sync version (simpler, sequential requests)
+streamlit run main_requests.py
+
+# CLI script version (automation-friendly, no UI)
+python batch_script.py input.xlsx
+python batch_script.py input.xlsx --output results.xlsx --env sandbox --concurrency 10
+python batch_script.py input.xlsx -o results.xlsx -e production -c 5
 ```
 
 ### Environment setup
@@ -68,10 +93,10 @@ export IRAS_CLIENT_SECRET=your_client_secret
 Managed via `uv` (see `pyproject.toml`):
 
 - Python >=3.10
-- streamlit for web UI
-- aiohttp for async HTTP
+- streamlit for web UI (main.py and main_requests.py only)
+- **For main.py**: aiohttp for async HTTP (no nest_asyncio - uses dedicated thread pattern)
+- **For main_requests.py and batch_script.py**: requests for sync HTTP
 - pandas + openpyxl for Excel I/O
-- **No nest_asyncio** - uses dedicated thread pattern instead
 
 ## Project-Specific Conventions
 
@@ -207,6 +232,42 @@ def process_batch_results(df_in, col_a_name, results):
 - API spec: `docs/Check_GST_Register-1.0.7.yaml`
 - Example response in `readme.md` shows returnCode=10 format
 
+## CLI Script Usage Examples
+
+```bash
+# Basic usage (output to <input>_results.xlsx)
+python batch_script.py companies.xlsx
+
+# Specify output file
+python batch_script.py companies.xlsx --output checked_companies.xlsx
+
+# Use sandbox environment
+python batch_script.py companies.xlsx --env sandbox
+
+# Short flags
+python batch_script.py companies.xlsx -o results.xlsx -e production
+
+# Help
+python batch_script.py --help
+
+# Automation example (bash)
+#!/bin/bash
+export IRAS_CLIENT_ID="your_id"
+export IRAS_CLIENT_SECRET="your_secret"
+python batch_script.py daily_batch.xlsx -o "results_$(date +%Y%m%d).xlsx"
+if [ $? -eq 0 ]; then
+    echo "Success! Results generated."
+else
+    echo "Failed with exit code $?"
+fi
+```
+
+**Exit codes:**
+
+- `0`: Success
+- `1`: Error (missing env vars, file not found, API errors, etc.)
+- `130`: Interrupted by user (Ctrl+C)
+
 ## What NOT to Change
 
 - `RATE_LIMIT_MAX = 100` and `RATE_LIMIT_WINDOW_SEC = 3600` (IRAS contractual limit)
@@ -228,8 +289,50 @@ def process_batch_results(df_in, col_a_name, results):
 
 ## Code Quality Notes
 
+### main.py (Async)
+
 - **Refactored for clarity**: ~280 lines (reduced from ~330) while maintaining all functionality
 - **Helper functions**: `process_batch_results()` extracts complex result processing logic for better testability
 - **Simplified client**: `IRASClient` requires session in constructor, no optional parameters
 - **Inline rate limiter init**: Deque initialization happens in `allowed_calls_remaining()` on first call
 - **Consolidated error handling**: Single catch-all for `ClientError` and generic `Exception`
+
+### main_requests.py (Sync)
+
+### main_requests.py (Sync)
+
+- **Simpler architecture**: ~270 lines with straightforward synchronous flow
+- **Same helper functions**: Reuses `process_batch_results()` and rate limiter logic
+- **Session pooling**: Uses `requests.Session()` for connection reuse
+- **Real-time progress**: Accurate progress bar updates during sequential processing
+- **Easier debugging**: Standard Python stack traces, no async complexity
+
+### batch_script.py (CLI)
+
+- **Automation-ready**: ~320 lines, designed for headless/scripted execution
+- **Same core logic**: Reuses `IRASClient`, `process_batch_results()`, and rate limiter from `main_requests.py`
+- **Synchronous processing**: Sequential requests using `requests.Session()` (simpler than async)
+- **CLI parsing**: Uses `argparse` for input file, output file, and environment flags
+- **Console progress**: Unicode progress bar (`█░`) with percentage display
+- **Exit codes**: Proper exit codes for success (0) and various error conditions (1, 130 for Ctrl+C)
+- **Summary stats**: Prints success/error counts after completion
+
+## When to Use Which Version
+
+| Feature        | main.py (Streamlit Async) | main_requests.py (Streamlit Sync) | batch_script.py (CLI) |
+| -------------- | ------------------------- | --------------------------------- | --------------------- |
+| **Speed**      | Fast (5-20 parallel)      | Slower (sequential)               | Slower (sequential)   |
+| **Complexity** | High (threads, loops)     | Low (simple loop)                 | Low (simple loop)     |
+| **Use case**   | Interactive web UI        | Interactive web UI                | Automation/scripts    |
+| **Batch size** | 50-100 UENs               | <50 UENs                          | 50-100 UENs           |
+| **Progress**   | Estimated/fake            | Real-time accurate                | Console progress bar  |
+| **Debugging**  | Harder (async traces)     | Easier (standard)                 | Easier (standard)     |
+| **Automation** | Manual only               | Manual only                       | ✅ Scriptable         |
+| **UI**         | ✅ Web interface          | ✅ Web interface                  | ❌ CLI only           |
+
+**Recommendations:**
+
+- **Interactive use with small batches**: Start with `main_requests.py` (simplest)
+- **Interactive use with large batches**: Use `main.py` (fastest UI)
+- **Automation/cron jobs/CI-CD**: Use `batch_script.py` (no browser needed)
+- **Shell scripts/pipelines**: Use `batch_script.py` (proper exit codes, CLI args)
