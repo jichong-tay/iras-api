@@ -4,11 +4,12 @@
 
 A Streamlit web application that checks Singapore IRAS (Inland Revenue Authority) GST registration status via their official API. Supports both bulk Excel uploads and single UEN lookups with configurable concurrency and sliding-window rate limiting.
 
-**Three implementations available:**
+**Four implementations available:**
 
 - `main.py`: Streamlit async version with aiohttp (fast, parallel requests, complex)
 - `main_requests.py`: Streamlit sync version with requests (simple, sequential, easier to debug)
-- `batch_script.py`: CLI script version with requests (no UI, scriptable, automation-friendly, simple)
+- `batch_script.py`: CLI script version with requests (no UI, scriptable, automation-friendly, simple, sequential)
+- `batch_script_async.py`: CLI async script version with aiohttp (no UI, scriptable, automation-friendly, fast, parallel)
 
 ## Architecture
 
@@ -73,10 +74,15 @@ streamlit run main.py
 # Streamlit sync version (simpler, sequential requests)
 streamlit run main_requests.py
 
-# CLI script version (automation-friendly, no UI)
+# CLI script version (automation-friendly, no UI, sequential)
 python batch_script.py input.xlsx
-python batch_script.py input.xlsx --output results.xlsx --env sandbox --concurrency 10
-python batch_script.py input.xlsx -o results.xlsx -e production -c 5
+python batch_script.py input.xlsx --output results.xlsx --env sandbox
+python batch_script.py input.xlsx -o results.xlsx -e production
+
+# CLI async script version (automation-friendly, no UI, parallel)
+python batch_script_async.py input.xlsx
+python batch_script_async.py input.xlsx --output results.xlsx --env sandbox --concurrency 10
+python batch_script_async.py input.xlsx -o results.xlsx -e production -c 5
 ```
 
 ### Environment setup
@@ -94,7 +100,7 @@ Managed via `uv` (see `pyproject.toml`):
 
 - Python >=3.10
 - streamlit for web UI (main.py and main_requests.py only)
-- **For main.py**: aiohttp for async HTTP (no nest_asyncio - uses dedicated thread pattern)
+- **For main.py and batch_script_async.py**: aiohttp for async HTTP (no nest_asyncio - uses dedicated thread pattern)
 - **For main_requests.py and batch_script.py**: requests for sync HTTP
 - pandas + openpyxl for Excel I/O
 
@@ -234,6 +240,8 @@ def process_batch_results(df_in, col_a_name, results):
 
 ## CLI Script Usage Examples
 
+### batch_script.py (Sync)
+
 ```bash
 # Basic usage (output to <input>_results.xlsx)
 python batch_script.py companies.xlsx
@@ -249,12 +257,40 @@ python batch_script.py companies.xlsx -o results.xlsx -e production
 
 # Help
 python batch_script.py --help
+```
 
-# Automation example (bash)
+### batch_script_async.py (Async with Concurrency)
+
+```bash
+# Basic usage with default concurrency (10)
+python batch_script_async.py companies.xlsx
+
+# Specify output file and concurrency
+python batch_script_async.py companies.xlsx --output checked_companies.xlsx --concurrency 15
+
+# Use sandbox environment with higher concurrency
+python batch_script_async.py companies.xlsx --env sandbox --concurrency 20
+
+# Short flags
+python batch_script_async.py companies.xlsx -o results.xlsx -e production -c 5
+
+# Help
+python batch_script_async.py --help
+```
+
+### Automation Example (bash)
+
+```bash
 #!/bin/bash
 export IRAS_CLIENT_ID="your_id"
 export IRAS_CLIENT_SECRET="your_secret"
+
+# For sequential processing (simpler)
 python batch_script.py daily_batch.xlsx -o "results_$(date +%Y%m%d).xlsx"
+
+# Or for parallel processing (faster)
+python batch_script_async.py daily_batch.xlsx -o "results_$(date +%Y%m%d).xlsx" -c 10
+
 if [ $? -eq 0 ]; then
     echo "Success! Results generated."
 else
@@ -262,7 +298,7 @@ else
 fi
 ```
 
-**Exit codes:**
+**Exit codes (both scripts):**
 
 - `0`: Success
 - `1`: Error (missing env vars, file not found, API errors, etc.)
@@ -317,22 +353,34 @@ fi
 - **Exit codes**: Proper exit codes for success (0) and various error conditions (1, 130 for Ctrl+C)
 - **Summary stats**: Prints success/error counts after completion
 
+### batch_script_async.py (CLI Async)
+
+- **Automation-ready**: ~360 lines, designed for headless/scripted execution with parallel processing
+- **Same core logic**: Reuses `process_batch_results()` and rate limiter, but with async `IRASClient` from `main.py`
+- **Async processing**: Parallel requests using `aiohttp` with `asyncio.Semaphore` for concurrency control
+- **CLI parsing**: Uses `argparse` for input file, output file, environment, and concurrency flags
+- **Console progress**: Unicode progress bar (`█░`) with percentage display (updated asynchronously)
+- **Exit codes**: Proper exit codes for success (0) and various error conditions (1, 130 for Ctrl+C)
+- **Summary stats**: Prints success/error counts after completion
+- **asyncio.run()**: Uses standard `asyncio.run(main_async())` pattern (no Streamlit event loop conflicts)
+
 ## When to Use Which Version
 
-| Feature        | main.py (Streamlit Async) | main_requests.py (Streamlit Sync) | batch_script.py (CLI) |
-| -------------- | ------------------------- | --------------------------------- | --------------------- |
-| **Speed**      | Fast (5-20 parallel)      | Slower (sequential)               | Slower (sequential)   |
-| **Complexity** | High (threads, loops)     | Low (simple loop)                 | Low (simple loop)     |
-| **Use case**   | Interactive web UI        | Interactive web UI                | Automation/scripts    |
-| **Batch size** | 50-100 UENs               | <50 UENs                          | 50-100 UENs           |
-| **Progress**   | Estimated/fake            | Real-time accurate                | Console progress bar  |
-| **Debugging**  | Harder (async traces)     | Easier (standard)                 | Easier (standard)     |
-| **Automation** | Manual only               | Manual only                       | ✅ Scriptable         |
-| **UI**         | ✅ Web interface          | ✅ Web interface                  | ❌ CLI only           |
+| Feature        | main.py (Streamlit Async) | main_requests.py (Streamlit Sync) | batch_script.py (CLI) | batch_script_async.py (CLI Async) |
+| -------------- | ------------------------- | --------------------------------- | --------------------- | --------------------------------- |
+| **Speed**      | Fast (5-20 parallel)      | Slower (sequential)               | Slower (sequential)   | Fast (1-20 parallel)              |
+| **Complexity** | High (threads, loops)     | Low (simple loop)                 | Low (simple loop)     | Medium (async only)               |
+| **Use case**   | Interactive web UI        | Interactive web UI                | Automation/scripts    | Automation/scripts                |
+| **Batch size** | 50-100 UENs               | <50 UENs                          | 50-100 UENs           | 50-100 UENs                       |
+| **Progress**   | Estimated/fake            | Real-time accurate                | Console progress bar  | Console progress bar (async)      |
+| **Debugging**  | Harder (async traces)     | Easier (standard)                 | Easier (standard)     | Medium (async traces)             |
+| **Automation** | Manual only               | Manual only                       | ✅ Scriptable         | ✅ Scriptable                     |
+| **UI**         | ✅ Web interface          | ✅ Web interface                  | ❌ CLI only           | ❌ CLI only                       |
 
 **Recommendations:**
 
 - **Interactive use with small batches**: Start with `main_requests.py` (simplest)
 - **Interactive use with large batches**: Use `main.py` (fastest UI)
-- **Automation/cron jobs/CI-CD**: Use `batch_script.py` (no browser needed)
-- **Shell scripts/pipelines**: Use `batch_script.py` (proper exit codes, CLI args)
+- **Automation/cron jobs with small batches**: Use `batch_script.py` (simplest, no browser needed)
+- **Automation/cron jobs with large batches**: Use `batch_script_async.py` (fastest, parallel processing)
+- **Shell scripts/pipelines**: Use `batch_script.py` or `batch_script_async.py` (proper exit codes, CLI args)
