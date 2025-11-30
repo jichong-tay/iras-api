@@ -4,12 +4,13 @@
 
 A Streamlit web application that checks Singapore IRAS (Inland Revenue Authority) GST registration status via their official API. Supports both bulk Excel uploads and single UEN lookups with configurable concurrency and sliding-window rate limiting.
 
-**Four implementations available:**
+**Five implementations available:**
 
 - `main.py`: Streamlit async version with aiohttp (fast, parallel requests, complex)
 - `main_requests.py`: Streamlit sync version with requests (simple, sequential, easier to debug)
 - `batch_script.py`: CLI script version with requests (no UI, scriptable, automation-friendly, simple, sequential)
 - `batch_script_async.py`: CLI async script version with aiohttp (no UI, scriptable, automation-friendly, fast, parallel)
+- `main_redis.py`: Streamlit with Redis queue (background job processing, multiple jobs, rate limit tracking from headers)
 
 ## Architecture
 
@@ -28,6 +29,16 @@ A Streamlit web application that checks Singapore IRAS (Inland Revenue Authority
 - **Rate limiting**: Same sliding-window tracker as async version
 - **Simpler code**: ~270 lines, no event loops, no async/await syntax
 - **Better progress**: Real-time accurate progress updates during batch processing
+
+### main_redis.py (Redis Queue Version)
+
+- **Background processing**: Jobs queued in Redis, processed by separate worker process
+- **Multiple jobs**: Submit multiple Excel uploads, track independently
+- **Rate limit from headers**: Reads `X-RateLimit-Remaining`, `X-RateLimit-Reset` from API responses
+- **Persistent results**: Jobs and Excel results stored in Redis with 24-hour expiration
+- **Two-process architecture**: Streamlit UI + background worker (both from same file)
+- **Job statuses**: PENDING → PROCESSING → COMPLETED/FAILED
+- **Redis keys**: `iras:job:<id>`, `iras:result:<id>`, `iras:queue`, `iras:rate_limit`
 
 ## Critical API Integration Details
 
@@ -58,10 +69,11 @@ A Streamlit web application that checks Singapore IRAS (Inland Revenue Authority
 
 **Rate limit enforcement**:
 
-- **Sliding window**: `deque(maxlen=100)` tracks timestamps of last 100 calls
+- **Sliding window** (main.py, main_requests.py, batch_script\*.py): `deque(maxlen=100)` tracks timestamps of last 100 calls
 - **Dynamic cap**: Batch size limited by `allowed_calls_remaining()` which drops timestamps older than 1 hour
 - **Session-scoped**: Rate tracking persists across Streamlit reruns via `st.session_state`
-- No artificial sleep delays - relies on natural I/O pacing and user awareness
+- **Header-based** (main_redis.py): Reads `X-RateLimit-Remaining`, `X-RateLimit-Reset`, `X-RateLimit-Limit` from API response headers
+- No artificial sleep delays - relies on natural I/O pacing and user awareness (except main_redis.py which auto-waits for reset)
 
 ## Key Workflows
 
@@ -83,6 +95,19 @@ python batch_script.py input.xlsx -o results.xlsx -e production
 python batch_script_async.py input.xlsx
 python batch_script_async.py input.xlsx --output results.xlsx --env sandbox --concurrency 10
 python batch_script_async.py input.xlsx -o results.xlsx -e production -c 5
+
+# Redis queue version (background processing, multiple jobs)
+# Terminal 1: Start Redis server
+redis-server
+
+# Terminal 2: Start background worker
+python main_redis.py worker
+
+# Terminal 3: Start Streamlit UI
+streamlit run main_redis.py
+
+# Or use the convenience script (starts both worker and UI)
+./start_redis_app.sh
 ```
 
 ### Environment setup
@@ -92,6 +117,9 @@ Set environment variables (uses `os.getenv()` directly - no `.env` file loaded):
 ```bash
 export IRAS_CLIENT_ID=your_client_id
 export IRAS_CLIENT_SECRET=your_client_secret
+
+# For Redis version (optional, defaults to localhost)
+export REDIS_URL=redis://localhost:6379
 ```
 
 ### Dependencies
@@ -99,9 +127,10 @@ export IRAS_CLIENT_SECRET=your_client_secret
 Managed via `uv` (see `pyproject.toml`):
 
 - Python >=3.10
-- streamlit for web UI (main.py and main_requests.py only)
+- streamlit for web UI (main.py, main_requests.py, main_redis.py)
 - **For main.py and batch_script_async.py**: aiohttp for async HTTP (no nest_asyncio - uses dedicated thread pattern)
 - **For main_requests.py and batch_script.py**: requests for sync HTTP
+- **For main_redis.py**: redis (async client) for job queue and storage
 - pandas + openpyxl for Excel I/O
 
 ## Project-Specific Conventions
@@ -366,16 +395,20 @@ fi
 
 ## When to Use Which Version
 
-| Feature        | main.py (Streamlit Async) | main_requests.py (Streamlit Sync) | batch_script.py (CLI) | batch_script_async.py (CLI Async) |
-| -------------- | ------------------------- | --------------------------------- | --------------------- | --------------------------------- |
-| **Speed**      | Fast (5-20 parallel)      | Slower (sequential)               | Slower (sequential)   | Fast (1-20 parallel)              |
-| **Complexity** | High (threads, loops)     | Low (simple loop)                 | Low (simple loop)     | Medium (async only)               |
-| **Use case**   | Interactive web UI        | Interactive web UI                | Automation/scripts    | Automation/scripts                |
-| **Batch size** | 50-100 UENs               | <50 UENs                          | 50-100 UENs           | 50-100 UENs                       |
-| **Progress**   | Estimated/fake            | Real-time accurate                | Console progress bar  | Console progress bar (async)      |
-| **Debugging**  | Harder (async traces)     | Easier (standard)                 | Easier (standard)     | Medium (async traces)             |
-| **Automation** | Manual only               | Manual only                       | ✅ Scriptable         | ✅ Scriptable                     |
-| **UI**         | ✅ Web interface          | ✅ Web interface                  | ❌ CLI only           | ❌ CLI only                       |
+| Feature               | main.py     | main_requests.py | batch_script.py | batch_script_async.py | main_redis.py      |
+| --------------------- | ----------- | ---------------- | --------------- | --------------------- | ------------------ |
+| **Speed**             | Fast        | Slower           | Slower          | Fast                  | Fast (background)  |
+| **Complexity**        | High        | Low              | Low             | Medium                | Very High          |
+| **Use case**          | Web UI      | Web UI           | CLI/Automation  | CLI/Automation        | Web UI             |
+| **Batch size**        | 50-100 UENs | <50 UENs         | 50-100 UENs     | 50-100 UENs           | Unlimited (queued) |
+| **Progress**          | Estimated   | Real-time        | Console bar     | Console bar           | Real-time UI       |
+| **Debugging**         | Hard        | Easy             | Easy            | Medium                | Very Hard          |
+| **Automation**        | ❌          | ❌               | ✅              | ✅                    | ❌                 |
+| **UI**                | ✅          | ✅               | ❌              | ❌                    | ✅                 |
+| **Background Jobs**   | ❌          | ❌               | ❌              | ❌                    | ✅                 |
+| **Multiple Jobs**     | ❌          | ❌               | ❌              | ❌                    | ✅                 |
+| **Rate Limit Source** | Sliding     | Sliding          | Sliding         | Sliding               | API Headers        |
+| **Dependencies**      | aiohttp     | requests         | requests        | aiohttp               | aiohttp + redis    |
 
 **Recommendations:**
 
@@ -384,3 +417,6 @@ fi
 - **Automation/cron jobs with small batches**: Use `batch_script.py` (simplest, no browser needed)
 - **Automation/cron jobs with large batches**: Use `batch_script_async.py` (fastest, parallel processing)
 - **Shell scripts/pipelines**: Use `batch_script.py` or `batch_script_async.py` (proper exit codes, CLI args)
+- **Multiple simultaneous batches**: Use `main_redis.py` (queue multiple jobs, process in background)
+- **Long-running batches (>100 UENs)**: Use `main_redis.py` (won't block UI, can monitor later)
+- **Production with high volume**: Use `main_redis.py` (horizontal scaling with multiple workers)
